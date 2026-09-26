@@ -1,8 +1,4 @@
 # Designing Machine Learning Systems — Chapter Notes
-
-Sep 24, 2026 · @Mahmud Hasan
-Artifact link: https://claude.ai/artifact/Y1AL6SKvpooWJxAYzeGdTV#3cfca2a3-ac43
-
 ## About the book
 
 *Designing Machine Learning Systems* by Chip Huyen (O'Reilly, 2022) treats an ML system as a whole — business requirements, data, features, models, deployment, monitoring, infrastructure and people — not just the algorithm. Its core argument: the model is a small part of a production ML system, and most of the hard problems live around it.
