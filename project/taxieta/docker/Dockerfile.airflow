@@ -1,0 +1,23 @@
+# Airflow 3 + TaxiETA in an ISOLATED virtualenv (Milestone 9).
+#
+# Airflow pins hundreds of dependencies; your ML stack pins its own. Installing both into one
+# environment is how "works on my machine" bugs start (Ch. 10). So the DAGs never import
+# taxieta -- they call the `taxieta` CLI from its own venv via $TAXIETA_BIN.
+ARG AIRFLOW_VERSION=3.3.2
+FROM apache/airflow:${AIRFLOW_VERSION}-python3.11
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 git \
+    && rm -rf /var/lib/apt/lists/*
+USER airflow
+
+COPY --chown=airflow:root pyproject.toml README.md /opt/taxieta/
+COPY --chown=airflow:root src /opt/taxieta/src
+RUN python -m venv /home/airflow/taxieta-venv \
+    && /home/airflow/taxieta-venv/bin/pip install --no-cache-dir -e "/opt/taxieta[stream,tracking]"
+
+ENV TAXIETA_BIN=/home/airflow/taxieta-venv/bin/taxieta \
+    TAXIETA_ROOT=/opt/taxieta \
+    TAXIETA_DATA=/opt/taxieta/data \
+    TAXIETA_REPORTS=/opt/taxieta/reports \
+    MLFLOW_DISABLE_AGENT_HINT=1

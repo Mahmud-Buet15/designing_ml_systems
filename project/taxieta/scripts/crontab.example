@@ -1,0 +1,9 @@
+# Milestone 9, part B: schedule the pipeline with plain cron FIRST, then feel its limits.
+# Install with `crontab scripts/crontab.example` (edit the paths). Break one step on purpose:
+# cron will happily run the next steps anyway -- no dependencies, retries, or branching.
+#
+# m  h  dom mon dow  command
+  0  2  *   *   *    cd $HOME/taxieta && .venv/bin/taxieta ingest --months 2019-05 >> /tmp/taxieta-cron.log 2>&1
+ 30  2  *   *   *    cd $HOME/taxieta && .venv/bin/taxieta drift-check --reference 2019-04 --current 2019-05 >> /tmp/taxieta-cron.log 2>&1
+  0  3  *   *   *    cd $HOME/taxieta && .venv/bin/taxieta train --train 2019-02:2019-03 --valid 2019-04 --test 2019-05 >> /tmp/taxieta-cron.log 2>&1
+  0  4  *   *   *    cd $HOME/taxieta && .venv/bin/taxieta batch-predict >> /tmp/taxieta-cron.log 2>&1
