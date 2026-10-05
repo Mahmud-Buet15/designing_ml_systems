@@ -1,4 +1,7 @@
 # Designing Machine Learning Systems — Chapter Notes
+
+Sep 24, 2026 · @Mahmud Hasan
+
 ## About the book
 
 *Designing Machine Learning Systems* by Chip Huyen (O'Reilly, 2022) treats an ML system as a whole — business requirements, data, features, models, deployment, monitoring, infrastructure and people — not just the algorithm. Its core argument: the model is a small part of a production ML system, and most of the hard problems live around it.
@@ -173,6 +176,33 @@ An ML problem is defined by **inputs, outputs, and an objective function**. “S
 - Option B (preferred) — two models (quality\_model, engagement\_model), rank by `α·quality_score + β·engagement_score`. Tweak α, β without retraining.
 - Decoupling also allows different maintenance schedules (spam evolves faster than perceived quality).
 
+**The newsfeed example, step by step.** The goal is "maximize user engagement while minimizing the spread of extreme views and misinformation". That single sentence hides several objectives that pull in different directions.
+
+1. **Filter** what must never be shown: spam, NSFW content, misinformation. These are hard constraints, so they're filters (a yes/no gate), not scores to trade off.
+2. **Rank** what's left. Engagement alone (the chance a user clicks, likes or shares) rewards the most extreme posts, because they get the most reactions. So add a second objective: **quality**, e.g. how likely a human rater would call the post high-quality or trustworthy.
+3. The two conflict: the most engaging post is often not the highest quality. A single "best" ranking doesn't exist; there is only a trade-off you choose.
+
+**Why Option B (two models) usually wins:**
+
+|  | Option A: one model, combined loss | Option B: two models, combined score |
+| --- | --- | --- |
+| Change the trade-off (α, β) | Retrain the whole model | Change two numbers at serving time |
+| Try several trade-offs in A/B tests | One training run per variant | Same two models, different weights per arm |
+| Update one objective | Retrain everything | Retrain only that model, on its own schedule |
+| Labels | Need both labels on the same examples | Each model uses the data that fits it (clicks for engagement, rater labels for quality) |
+| Debugging | Hard to tell which objective moved | Each score can be monitored on its own |
+
+**Worked example.** Post X has quality 0.3 and engagement 0.9; post Y has quality 0.8 and engagement 0.5. With α = β = 0.5, X scores 0.60 and Y scores 0.65, so Y ranks first. With α = 0.2, β = 0.8, X scores 0.78 and Y 0.56, so X wins. The models didn't change, only the product decision about how much quality matters.
+
+**Choosing α and β.** Plot each candidate weighting as a point (average quality, average engagement) on a validation set. The **Pareto front** is the set of weightings where you can't improve one objective without hurting the other. Any point off the front is strictly worse. Picking a point on the front is a product/policy decision; confirm it with an online A/B test, since offline scores are proxies.
+
+**Practical cautions:**
+
+- Put the scores on the same scale before mixing them (calibrated probabilities, or percentiles). Otherwise the weights mean nothing: a score that ranges 0–100 swamps one that ranges 0–1.
+- The weights encode values (how much engagement you'll trade for quality), so document who chose them and why.
+- Maintenance schedules differ: spam tactics change daily, so the spam filter retrains often; perceived quality drifts slowly, so its model can retrain monthly. With one combined model, the fastest-changing objective would force retraining everything.
+- The same pattern shows up elsewhere: ads (relevance vs revenue), search (relevance vs freshness), ride-hailing dispatch (pickup time vs driver earnings vs fairness).
+
 ### Mind versus data
 
 - **Mind camp:** Judea Pearl (“Data is profoundly dumb”; predicted data-centric ML folks would be jobless in 3–5 years). Christopher Manning: huge compute + data + simple algorithm = bad learners; structure lets systems learn more from less.
@@ -261,12 +291,73 @@ Why OLTP/OLAP are outdated terms:
 2. **Decoupling storage from compute** (BigQuery, Snowflake, IBM, Teradata): store once, optimize processing per query type.
 3. “Online” is overloaded: internet-connected, in production, or a speed tier — **online** (immediately available), **nearline** (available quickly without humans), **offline** (needs human intervention).
 
+**OLTP vs OLAP in more detail.** The difference is the *workload*: many small reads and writes of whole records, versus a few huge reads of a few columns.
+
+|  | OLTP (transactional) | OLAP (analytical) |
+| --- | --- | --- |
+| Typical operation | Insert/update/read one record: "create ride 812", "mark ride 812 completed" | Aggregate one column over millions of rows: "average fare per borough last month" |
+| Rows touched per query | 1 to a few | Millions to billions |
+| Columns touched | Most columns of that row | A few columns of every row |
+| What matters | Latency (ms), high availability, correctness under concurrency (ACID) | Throughput: scanning lots of data fast |
+| Writes | Constant, small, concurrent | Bulk loads (hourly/daily batches) |
+| Storage layout | Row-major: a row's fields sit together, so writing/reading one record is one lookup | Column-major: a column's values sit together, so a query reads only the columns it needs, and similar values compress well |
+| Examples | PostgreSQL, MySQL, CockroachDB, DynamoDB | BigQuery, Snowflake, Redshift, ClickHouse, DuckDB; Parquet files in a data lake |
+
+**Why row vs column layout matters.** Take a rides table with 20 columns and 1 billion rows. "Average fare" in a row store must read every row (all 20 fields) to pick out one field: about 20× more data than needed. A column store reads just the `fare` column, often compressed 5–10× because values are similar. The reverse holds for OLTP: fetching all 20 fields of ride 812 from a column store means 20 separate lookups, one per column file.
+
+**Why they were kept in separate systems.** Running a heavy analytical scan on the production transactional database slows down the live app (riders waiting on a query that averages a year of fares). So companies copy data from OLTP databases into an OLAP warehouse, traditionally with nightly ETL. That copy is also why analytics data is usually hours or a day behind.
+
+**Where each shows up in an ML system:**
+
+- **OLTP / online stores:** everything on the request path. The app's own database (users, rides), the online feature store (latest feature values per entity, read in milliseconds at prediction time), the prediction log (one write per prediction).
+- **OLAP / warehouse / lake:** everything that looks at history. Building training sets, computing aggregate features ("median trip time per zone pair over 28 days"), evaluation and slice analysis, monitoring dashboards.
+- The two meet in a feature store: batch features are computed in OLAP and **materialized** (copied) into the online store for fast serving. Keeping the two copies consistent is a classic source of train/serve skew.
+
+**What "outdated" means in practice.** The line between the two is blurring (points 1–3 above). **HTAP** (hybrid transactional/analytical processing) databases try to serve both workloads from one system, and lakehouse formats (Iceberg, Delta Lake) add transactions to analytical storage. The workload distinction still matters, though. Even when one product serves both, you choose layout, indexes and hardware by the access pattern: point lookups vs scans.
+
 **ETL (Extract, Transform, Load)**
 
 - **Extract** — pull from sources; validate and reject malformed data early (and notify sources).
 - **Transform** — the meaty part: join, clean, standardize values (“Male”/“M”/“1”), transpose, dedupe, sort, aggregate, derive features, validate.
 - **Load** — decide how and how often to write into a file, database or warehouse.
 - **ELT** — load raw data into a lake first, transform later: fast arrival but inefficient to search massive raw data. As schemas standardize, committing to schema is feasible again. **Data lakehouses** (Databricks, Snowflake) combine lake flexibility with warehouse management.
+
+**Warehouse, lake, lakehouse.** A lakehouse keeps data as cheap open files in object storage (like a lake), and adds a management layer that gives it warehouse behaviour.
+
+|  | Data warehouse | Data lake | Lakehouse |
+| --- | --- | --- | --- |
+| What's stored | Cleaned, structured tables (schema on write) | Anything raw: JSON, logs, images, CSV, Parquet (schema on read) | Open files (mostly Parquet) plus a table layer on top |
+| Storage | Inside the warehouse, proprietary format | Cheap object storage (S3, GCS, ADLS) | Cheap object storage, open formats |
+| Transactions / updates | Yes (ACID) | No: files are just written and overwritten | Yes, via the table format's transaction log |
+| Schema | Enforced | Not enforced; easy to end up with a "data swamp" | Enforced, with controlled schema evolution |
+| Who uses it | BI, SQL analysts | Data engineers, ML on raw data | Both, from one copy of the data |
+
+**How a lakehouse works.**
+
+- **Open file format:** data is stored as Parquet (column-oriented, compressed).
+- **Open table format:** Delta Lake (created by Databricks), Apache Iceberg or Apache Hudi. It keeps a *transaction log / metadata* that says which files make up the table at each version. This gives:
+  - **ACID transactions:** readers never see half-written data, and concurrent writers don't corrupt each other.
+  - **Schema enforcement and evolution:** bad writes are rejected; adding a column is a tracked change.
+  - **Updates and deletes** (e.g., GDPR deletion requests) without rewriting the whole dataset by hand.
+  - **Time travel:** query the table *as of* a past version or timestamp.
+  - **Statistics for skipping files** (min/max per column), so queries read only relevant files.
+- **Any compute engine** can read the same tables: Spark, Trino, Flink, DuckDB, or a warehouse engine. Storage and compute are decoupled.
+- **Vendors:** Databricks is built around Delta Lake. Snowflake started as a warehouse and now also manages Iceberg tables on your storage. Cloud warehouses (BigQuery, Redshift) likewise read open table formats.
+
+&#91;embedded content: lakehouse layers · storage up to consumers\]
+
+Read it bottom-up: data lands raw in cheap object storage and is refined bronze → silver → gold. The table format turns those files into reliable tables, so every engine, and every consumer above it, reads the same single copy.
+
+**Why ML teams care.**
+
+- **Reproducible training data:** time travel means "the exact table version model v12 was trained on" can be queried later. This is data versioning without copying the data.
+- **One copy for BI and ML:** analysts use SQL, data scientists read the same Parquet files from Python. There's no separate export pipeline to drift out of sync.
+- **Raw and curated data together:** keep raw events (bronze), cleaned tables (silver) and feature/aggregate tables (gold) in one place. This is the common "medallion" layering.
+- **Batch and streaming:** streaming jobs can append to the same tables that batch jobs read.
+
+**Trade-offs:** more moving parts than a single warehouse (catalog, table maintenance such as compacting small files and expiring old versions). Performance depends on file layout and partitioning. For small teams a managed warehouse can be simpler.
+
+**In the hands-on project:** the lake is Hive-partitioned Parquet (`year=/month=`) queried with DuckDB. That's a minimal lake. It becomes a lakehouse if you put the files under Iceberg or Delta, gaining time travel for exact training-data versions.
 
 ### Modes of dataflow
 
@@ -279,6 +370,41 @@ How do processes that don't share memory pass data?
    - **Pubsub** (Apache Kafka, Amazon Kinesis): publish to topics; subscribers read all events; producers don't care who consumes; retention policy (e.g., 7 days) then delete or move to S3.
    - **Message queue** (Apache RocketMQ, RabbitMQ): events have intended consumers (“messages”); the queue delivers them.
 
+&#91;embedded content: modes of dataflow · database, services, broker\]
+
+Only the broker decouples both sides: A doesn't know who reads its events, and B can be down without A noticing.
+
+**The three modes side by side.**
+
+|  | Through a database | Through services (request-driven) | Through real-time transport (event-driven) |
+| --- | --- | --- | --- |
+| How data moves | A writes rows; B queries them later | B asks A over the network and waits for the answer | A publishes events to a broker; B reads them when ready |
+| Coupling | Both must share the DB and agree on its schema | B must know A's address and API, and A must be up | Producer and consumer only know the topic and event format |
+| Latency | Seconds to hours (depends on how often B polls) | Milliseconds per call, but calls add up in chains | Milliseconds from publish to read |
+| When A is down | B reads stale data | B's request fails or times out (failures cascade) | Events wait in the broker; B catches up later |
+| Typical examples | Nightly jobs, dashboards, the data warehouse | Prediction APIs, payments, login | Clickstreams, IoT sensors, ride status updates, streaming features |
+
+**The ride-sharing app, all three ways.** To set a surge price, the pricing service needs the current number of available drivers and open ride requests in an area.
+
+- *Database:* driver and ride services write to tables; pricing queries them every minute. Simple, but always up to a minute stale, and the database becomes a shared bottleneck.
+- *Request-driven:* pricing calls driver management and ride management directly. Fresh data, but if driver management is slow, pricing is slow too. With 10+ services calling each other, one slow service can stall the whole web.
+- *Event-driven:* driver and ride services publish events ("driver 42 went online in zone 7", "ride requested in zone 7") to a broker. Pricing consumes them and keeps running counts per zone. Other services (fraud, ETA, analytics) read the same events without asking anyone.
+
+**Request-driven, in practice.** REST over HTTP (JSON, human-readable, used for public APIs) vs RPC frameworks like gRPC (binary Protocol Buffers, typed contracts, faster, used between internal services). Every synchronous call needs a **timeout**, **retries with backoff** and ideally a **circuit breaker** (stop calling a failing service for a while) and a **cache** for answers that change slowly, like the "refresh every minute" in the book's example.
+
+**Event-driven, in practice:**
+
+- **Pubsub (Kafka, Kinesis, Redpanda):** a topic is an append-only log split into **partitions**. Events with the same key (e.g., a ride id) go to the same partition, so their order is kept. Each **consumer group** tracks its own position (offset), so many independent consumers can read the same data at their own pace and even **replay** it after a bug fix.
+- **Message queue (RabbitMQ, RocketMQ, SQS):** each message is meant for a consumer; once processed and acknowledged, it's gone. Good for distributing tasks ("send this email") among workers.
+- **Delivery guarantees:** *at-most-once* (can lose events), *at-least-once* (can duplicate them, the most common default), *exactly-once* (supported in limited setups, e.g. Kafka transactions). With at-least-once, consumers should be **idempotent**, so processing the same event twice does no harm.
+- **Retention:** brokers keep events for a limited time (e.g., 7 days); longer history goes to cheaper storage (S3) or the data lake for training.
+
+&#91;embedded content: pubsub vs message queue · who receives each event\]
+
+The key difference is who receives an event: in pubsub every consumer group reads all of them; in a queue each message is handed to exactly one worker.
+
+**Why this matters for ML.** Training usually reads from the database/lake (history). Serving a prediction is request-driven (the app calls the model API). **Streaming features** come from real-time transport: a consumer computes "trips completed in this zone in the last 15 minutes" from events and writes it to the online store. In the hands-on project, the replayer publishes `trip_started` and `trip_completed` events to Redpanda (a Kafka-compatible broker), the consumer computes zone speed from them, and the API reads the result at request time.
+
 ### Batch vs. stream processing
 
 - **Historical data** (in databases, lakes, warehouses) → **batch processing**, jobs kicked off periodically (e.g., daily); engines: MapReduce, Spark. Produces **batch / static features** that change slowly (a driver's rating).
@@ -287,6 +413,47 @@ How do processes that don't share memory pass data?
 - Many problems need **both** batch and streaming features joined together (Ch. 7).
 - Stream engines: Apache Flink, KSQL, Spark Streaming (Flink and KSQL offer SQL abstractions). Kafka's built-in processing is limited. Fraud/credit scoring can need hundreds or thousands of streaming features.
 - Streaming is harder (unbounded data, variable rates). It's easier to make a stream processor do batch than vice versa — Flink maintainers argue **batch is a special case of streaming**.
+
+**Batch vs stream processing in more detail.**
+
+|  | Batch processing | Stream processing |
+| --- | --- | --- |
+| Input | A bounded dataset: yesterday's table, last month's files | An unbounded sequence of events that never "ends" |
+| When it runs | On a schedule (hourly, daily) or on demand | Continuously, as each event (or micro-batch) arrives |
+| Freshness of results | As old as the last run: hours to a day | Seconds to minutes |
+| Completeness | Sees all the data for the period, so results are easy to get right | Must decide when a window is "done" while late events may still arrive |
+| State | Recomputed from scratch each run (simple) | Kept between events: running counts, open windows |
+| Fixing a bug | Rerun the job over the history | Replay the stream from the broker (limited by retention) or backfill from the lake |
+| Engines | Spark, MapReduce, SQL in a warehouse, dbt | Flink, Spark Structured Streaming, Kafka Streams, ksqlDB |
+| Feature examples | Driver's average rating, restaurant's average prep time, a user's 90-day spend | Drivers available now, rides requested in the last minute, a card's transactions in the last 10 minutes |
+
+&#91;embedded content: batch and streaming paths · joined in the online store\]
+
+A prediction usually needs both kinds of features. Each path writes its latest values into the online store, and the model service reads them together with the request. The risk is **train/serve skew**: if training data computes "rides in last minute" with a batch SQL query while serving uses the Flink job, the two definitions drift. The fix is one feature definition used by both paths (the job of a feature store).
+
+**Windows: how streaming features are computed.** Most streaming features are an aggregate (count, sum, median) over a *window* of recent events.
+
+&#91;embedded content: tumbling, sliding and session windows · same events\]
+
+- **Tumbling:** back-to-back, non-overlapping windows ("trips per 5-minute block"). Cheap; one value per block.
+- **Sliding (hopping):** fixed-size windows that start every step ("trips in the last 5 minutes, updated every minute"). Smoother, fresher, costs more.
+- **Session:** a window stays open while events keep coming and closes after a quiet gap ("clicks in this browsing session").
+- **Event time vs processing time:** group by when the event *happened*, not when it arrived. Phones go offline and events arrive late or out of order.
+- **Watermarks and late data:** the engine tracks "all events up to time T have probably arrived". It closes windows at the watermark and has a rule for events that come later (drop them, or update the result).
+
+**Stateless vs stateful, with numbers.** Feature: a user's engagement over the last 30 days, refreshed daily.
+
+- *Stateless:* every day, read 30 days of events and recompute: 30 days of data processed daily.
+- *Stateful:* keep the running total. Each day add today's events and subtract the day that fell out of the window: 2 days of data processed daily, about 15× less work.
+
+The price is that the state must be stored, checkpointed and restored after failures. Streaming engines like Flink do that for you.
+
+**Two classic architectures.**
+
+- **Lambda:** a batch layer (accurate, recomputes history) plus a speed layer (streaming, approximate, recent data), merged at query time. Robust, but the same logic lives in two codebases that must agree.
+- **Kappa:** streaming only; to recompute history, replay the log through the same stream job. One codebase, but it needs long retention or a replay path from the lake. This is the "batch is a special case of streaming" view.
+
+**In the hands-on project:** `hist_median_s` (median trip time per zone pair) is a batch feature. `zone_speed_15m` (median speed of trips completed in the last 15 minutes) is a streaming feature from the Redpanda consumer. The training pipeline recomputes the streaming feature point-in-time from the lake, and the M2/M9 checks prove both paths give the same values.
 
 ### Takeaways
 
@@ -612,6 +779,8 @@ Combine several **base learners** (e.g., majority vote of 3 spam classifiers). 2
 
 This only holds if learners are **uncorrelated** — so mix very different model types (transformer + RNN + gradient-boosted tree). Ensembles also help with class imbalance.
 
+Ensemble strategies:
+
 - **Bagging (bootstrap aggregating)** — sample *with replacement* to make bootstraps, train a model on each, then majority vote (classification) or average (regression). Reduces variance and overfitting, improves stability. Helps unstable methods (neural nets, trees); can slightly hurt stable ones (k-NN). **Random forest** = bagging + random feature subsets per tree.
 - **Boosting** — iteratively convert weak learners into a strong one: train on data, reweight samples so misclassified ones count more, train the next learner, repeat; final model = weighted combination (lower-error learners weigh more). **GBM** generalizes this to any differentiable loss. **XGBoost** long dominated competitions (even the Higgs Boson discovery); **LightGBM** allows parallel learning and faster training on big data.
 - **Stacking** — train base learners, then a **meta-learner** (majority vote, average, or a logistic/linear regression) combines their outputs.
@@ -699,7 +868,7 @@ Each phase's solution becomes the baseline for the next.
 3. **Optimizing simple models** — different objectives, hyperparameter search, feature engineering, more data, ensembles.
 4. **Complex models** — once simple models hit their limit; also measure how fast models decay in production to plan retraining infrastructure.
 
-### Model offline evaluation
+### Model offline evaluation&#32;
 
 “How do I know our ML models are any good?” (one company had drones with no way to count missed intrusions). Partner with business teams for relevant metrics. Ideally evaluate the same way in development and production, but production often lacks labels.
 
@@ -794,6 +963,33 @@ Three main modes to remember:
 - Google Maps ETA example: “average speed of cars on your path in the last 5 minutes” is computed in batch (dataframe over a month) for training but on a sliding window for inference.
 - **Two pipelines are a common source of production bugs** — changes not replicated, especially when different teams own training (batch) and inference (streaming).
 - Uber and Weibo overhauled infrastructure to unify pipelines with **Apache Flink**; others use **feature stores** for consistency (Ch. 10).
+
+**Why two pipelines drift apart.** The training pipeline and the serving pipeline compute "the same" feature with different code, often in different languages (SQL or Spark for training, Java/Flink or Python for serving). Small, silent differences creep in:
+
+- **Window edges:** training uses `[t−5 min, t]` while serving uses `(t−5 min, t)`, or one counts the current event and the other doesn't.
+- **Time:** event time vs processing time, time zones, daylight-saving days.
+- **Late or missing data:** the batch job sees events that arrived late; the stream job never did. Or one fills missing values with 0 and the other with the mean.
+- **Units and encodings:** seconds vs milliseconds, a new category code in one pipeline only.
+- **Change management:** a fix merged into the training code but not the serving code (the book's point about different teams owning each side).
+
+The model then sees inputs at serving time that don't look like its training data: **train/serve skew**. Accuracy drops without any error being raised.
+
+**The Google Maps ETA example, step by step.** Feature: average speed of cars on your route in the last 5 minutes.
+
+- *Training (batch):* take a month of GPS data as a dataframe. For each historical trip, compute the average speed on its route in the 5 minutes before it started. That's easy and fast with a group-by over the whole month.
+- *Serving (streaming):* a live stream of GPS pings. Keep a sliding 5-minute window per road segment and read its current value when a user asks for an ETA.
+- Same idea, two implementations. Any difference between them (how segments are matched, how stale pings are dropped) becomes skew.
+
+**Ways to unify them:**
+
+| Approach | How it works | Pros | Cons |
+| --- | --- | --- | --- |
+| One engine for both | Run the same job in batch mode for training and streaming mode for serving (Flink, Spark Structured Streaming). Replay history through the stream job to backfill | One codebase, one definition | Big infrastructure change (what Uber and Weibo did) |
+| One definition, two runtimes | Declare the feature once (a feature store such as Feast or Tecton, or a shared library); it generates both the offline computation and the online one | Consistency without replacing engines | You still need to trust and test the generated code paths |
+| Log and wait | Log the exact features used at serving time; train later on those logs once labels arrive | Training data *is* serving data, so there's no skew by construction | Can't train on history before logging started; new features need time to accumulate |
+| Shared code + point-in-time backfill | The streaming logic is a pure function reused to compute historical values for training | Cheap to adopt | Only works if everyone really uses the shared function |
+
+**Whichever you pick, test it.** Sample served requests, recompute their features offline with the training pipeline, and compare them value by value (a *consistency check*). Monitor the share of mismatches in production. In the hands-on project, M2 compares the batch and replayed-stream zone speed, and M9 checks that the Feast online values match the offline point-in-time join on 100% of 891 sampled requests.
 
 ### Model compression
 
