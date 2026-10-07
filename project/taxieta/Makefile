@@ -10,7 +10,8 @@ help:  ## list targets
 
 setup:  ## create .venv with uv and install the project + dev tools
 	uv venv .venv --python 3.11
-	uv pip install --python .venv -e ".[stream,tracking,serve,dev]"
+	uv pip install --python .venv -e ".[stream,tracking,serve,dev,solutions]"
+#Note: -e ".[stream,tracking,serve,dev,solutions]" means install extra packages for stream processing, tracking, serving, development and solutions
 
 fixture:  ## synthetic TLC-shaped data (offline / CI)
 	$(PY)/taxieta fixture --months $(MONTHS)

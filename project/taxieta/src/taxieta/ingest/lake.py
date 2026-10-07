@@ -49,6 +49,8 @@ def ingest_month(
     """Validate + transform + write one month to the lake. Returns the rejection report."""
     config.ensure_dirs()
     raw_path = raw_path or config.RAW_DIR / f"yellow_tripdata_{year}-{month:02d}.parquet"
+
+    # data loading and transforming
     raw = pd.read_parquet(raw_path)
     df = standardize(raw)
 
@@ -61,10 +63,12 @@ def ingest_month(
     out = transform(clean, load_zones(), year, month)
     CLEAN_SCHEMA.validate(out, lazy=True)
 
+    # ingesting data to data lake
     part_dir = config.LAKE_DIR / f"year={year}" / f"month={month}"
     part_dir.mkdir(parents=True, exist_ok=True)
     out.drop(columns=["year", "month"]).to_parquet(part_dir / "part-0.parquet", index=False)
 
+    # making report
     report.update({"year": year, "month": month, "sample_frac": sample_frac})
     rep_dir = config.REPORTS_DIR / "ingest"
     rep_dir.mkdir(parents=True, exist_ok=True)

@@ -13,3 +13,4 @@ reports/train_*.json
 mlruns/
 *.sqlite
 *.db
+reports/solutions/

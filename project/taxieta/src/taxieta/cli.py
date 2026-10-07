@@ -11,17 +11,23 @@ import sys
 
 
 def main(argv: list[str] | None = None) -> int:
+    # parser instance for main command `taxieta`
     p = argparse.ArgumentParser(prog="taxieta", description=__doc__)
-    sub = p.add_subparsers(dest="cmd", required=True)
 
+    # sub parser instance for sub command
+    sub = p.add_subparsers(dest="cmd", required=True)   # dest="cmd" stores the name of the chosen subcommand in args.cmd. For example, taxieta fixture gives args.cmd == "fixture". required=True makes argparse exit with an error if the user types just taxieta with no subcommand.
+
+    # sub command: fixture
     s = sub.add_parser("fixture", help="write synthetic TLC-shaped data (offline/CI)")
-    s.add_argument("--months", default="2019-01:2019-06,2020-01:2020-06")
-    s.add_argument("--rows", type=int, default=20_000)
+    s.add_argument("--months", default="2019-01:2019-06,2020-01:2020-06")  # optional argument
+    s.add_argument("--rows", type=int, default=20_000)  # optional argument with default value. 20_000 means 20,000
 
+    # sub command: download
     s = sub.add_parser("download", help="download real TLC Parquet files + zone lookup")
-    s.add_argument("--months", default="2019-01:2019-06,2020-01:2020-06")
-    s.add_argument("--force", action="store_true")
+    s.add_argument("--months", default="2019-01:2019-06,2020-01:2020-06")  # optional argument
+    s.add_argument("--force", action="store_true")  # optional argument without default value. means true if present
 
+    # sub command: ingest
     s = sub.add_parser("ingest", help="validate + transform + write the lake")
     s.add_argument("--months", default="2019-01:2019-06,2020-01:2020-06")
     s.add_argument("--sample-frac", type=float, default=None,
@@ -62,10 +68,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("champion", help="print the current champion's metadata")
 
+    s = sub.add_parser("solve", help="run a milestone's reference solution: taxieta solve m4 [-h]")
+    s.add_argument("milestone", choices=[f"m{i}" for i in range(1, 11)])
+    s.add_argument("rest", nargs=argparse.REMAINDER, help="options passed to the solution module")
+
     s = sub.add_parser("serve", help="run the prediction API")
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8000)
 
+    # parse arguments
     a = p.parse_args(argv)
 
     if a.cmd == "fixture":
@@ -111,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         from taxieta import model_store
         ch = model_store.load_champion()
         print(json.dumps(ch["meta"] if ch else None, indent=2, default=str))
+    elif a.cmd == "solve":
+        import importlib
+        importlib.import_module(f"taxieta.solutions.{a.milestone}").main(a.rest)
     elif a.cmd == "serve":
         import uvicorn
         uvicorn.run("taxieta.serving.app:app", host=a.host, port=a.port)

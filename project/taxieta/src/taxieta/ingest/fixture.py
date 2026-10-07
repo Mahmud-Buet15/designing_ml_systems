@@ -76,8 +76,8 @@ def make_month(year: int, month: int, n: int = 20_000, shift: bool = False, seed
     real = [z for z in _ZONES if z[0] not in config.UNKNOWN_ZONES]
     ids = np.array([z[0] for z in real])
     boro = np.array([z[1] for z in real])
-    w = np.where(boro == "Manhattan", 8.0, 1.0)
-    w = np.where(np.isin(ids, list(config.AIRPORT_ZONES)), 3.0, w)
+    w = np.where(boro == "Manhattan", 10.0, 0.6)
+    w = np.where(np.isin(ids, list(config.AIRPORT_ZONES)), 1.0, w)
     if shift:
         n = max(n // 8, 500)
         w = np.where(boro == "Manhattan", 3.0, w * 1.8)      # covariate shift
@@ -93,8 +93,11 @@ def make_month(year: int, month: int, n: int = 20_000, shift: bool = False, seed
     do = rng.choice(ids, size=n, p=w)
     dist = np.array([np.hypot(*(np.subtract(coords[a], coords[b]))) for a, b in zip(pu, do, strict=True)]) + 0.5
     rush = np.isin(hours, [7, 8, 9, 16, 17, 18]).astype(float)
-    speed_mph = (11 - 4 * rush) * (1.6 if shift else 1.0) * rng.lognormal(0, 0.25, n)   # concept drift
-    duration_s = np.clip(dist / speed_mph * 3600 + rng.normal(120, 60, n), 60, 5 * 3600)
+    # Longer trips use highways -> faster average speed; rush hour is slower.
+    speed_mph = (9 - 3 * rush) * (1 + dist / 6) * (1.6 if shift else 1.0) * rng.lognormal(0, 0.25, n)  # concept drift
+    duration_s = dist / speed_mph * 3600 + rng.normal(90, 45, n)
+    jam = rng.random(n) < 0.03                      # rare heavy delays -> realistic long tail
+    duration_s = np.clip(np.where(jam, duration_s * rng.uniform(2, 4.5, n), duration_s), 60, 5 * 3600)
     dropoff = pickup + pd.to_timedelta(np.round(duration_s), "s")
     metered = dist * rng.lognormal(0.05, 0.1, n)
     fare = 3 + 2.5 * metered + 0.5 * duration_s / 60

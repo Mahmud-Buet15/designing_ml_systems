@@ -79,17 +79,19 @@ class HistoricalStats:
     _global: float = float("nan")
 
     def fit(self, trips: pd.DataFrame) -> HistoricalStats:
+        """Fit the historical stats on the given trips."""
         if self.cutoff is not None:
             trips = trips[trips["pickup_ts"] < self.cutoff]
-        t = trips.assign(how=trips["pickup_ts"].dt.dayofweek * 24 + trips["pickup_ts"].dt.hour)
-        g1 = t.groupby(["pu_zone", "do_zone", "how"])["duration_s"].agg(["median", "size"])
-        self._by_pair_how = g1[g1["size"] >= self.min_count]
-        g2 = t.groupby(["pu_zone", "do_zone"])["duration_s"].agg(["median", "size"])
+        t = trips.assign(how=trips["pickup_ts"].dt.dayofweek * 24 + trips["pickup_ts"].dt.hour) # combines day-of-week (0–6) and hour (0–23) into a single integer feature in the range 0–167, representing each of the 168 hours in a week. This makes the feature suitable for use in machine learning models that expect numerical inputs
+        g1 = t.groupby(["pu_zone", "do_zone", "how"])["duration_s"].agg(["median", "size"])     # getting stats: median and count
+        self._by_pair_how = g1[g1["size"] >= self.min_count]    # exact match: same pickup zone, same dropoff zone, same hour-of-week. If fewer than min_count observations exist, this group is excluded.
+        g2 = t.groupby(["pu_zone", "do_zone"])["duration_s"].agg(["median", "size"])     # fallback  stats
         self._by_pair = g2[g2["size"] >= self.min_count]
-        self._global = float(t["duration_s"].median())
+        self._global = float(t["duration_s"].median())  # global median for the entire dataset
         return self
 
     def transform(self, req: pd.DataFrame) -> pd.DataFrame:
+        """Transform the request DataFrame by adding historical features."""
         how = req["pickup_ts"].dt.dayofweek * 24 + req["pickup_ts"].dt.hour
         k3 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"], how])
         k2 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"]])
