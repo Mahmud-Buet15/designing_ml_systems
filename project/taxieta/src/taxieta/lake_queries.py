@@ -32,12 +32,23 @@ QUERIES = {
     "monthly_speed": f"""
         SELECT year, month, round(median(trip_distance / (duration_s/3600)), 2) AS median_mph
         FROM {SRC} WHERE duration_s > 60 GROUP BY ALL ORDER BY year, month""",
-    # TODO(M2): add your own questions. E.g. which borough pairs have the most variable durations?
+    # SOLVED(M2): extra questions
+    "most_variable_borough_pairs": f"""
+        SELECT pu_borough, do_borough, count(*) AS n,
+               round(median(duration_s)/60, 1) AS median_min,
+               round((quantile_cont(duration_s, 0.9) - quantile_cont(duration_s, 0.1))/60, 1) AS p10_p90_spread_min
+        FROM {SRC} GROUP BY ALL HAVING count(*) >= 100
+        ORDER BY p10_p90_spread_min DESC LIMIT 10""",
+    "rush_vs_night_speed": f"""
+        SELECT CASE WHEN pickup_hour IN (7,8,16,17) THEN 'rush' WHEN pickup_hour BETWEEN 0 AND 5
+                    THEN 'night' ELSE 'other' END AS period,
+               round(median(trip_distance / (duration_s/3600)), 2) AS median_mph, count(*) AS n
+        FROM {SRC} WHERE duration_s > 60 AND trip_distance > 0 GROUP BY ALL ORDER BY median_mph""",
 }
 
 
 def run(name: str | None = None) -> None:
-    names = [name] if name else list(QUERIES)
+    names = [name] if name else list(QUERIES)   # if name is provided, run only that query, otherwise run all queries
     for n in names:
         print(f"\n== {n} ==")
         print(duckdb.sql(QUERIES[n]).df().to_string(index=False))

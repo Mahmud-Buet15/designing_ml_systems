@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="simple random down-sample while developing, e.g. 0.05")
 
     s = sub.add_parser("query", help="run the DuckDB OLAP queries over the lake")
-    s.add_argument("name", nargs="?")
+    s.add_argument("name", nargs="?")   # optional name argument for specific query e.g. taxieta query monthly_speed
 
     s = sub.add_parser("replay", help="stream a month of trips as live events")
     s.add_argument("--month", required=True)

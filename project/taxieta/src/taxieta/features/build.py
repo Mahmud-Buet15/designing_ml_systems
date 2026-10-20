@@ -147,20 +147,31 @@ def point_in_time_zone_speed(trips: pd.DataFrame, window: str = "15min") -> pd.S
 
     TODO(M4): verify this matches the streaming consumer exactly on one day (M2 task C).
     """
-    done = trips[["pu_zone", "dropoff_ts", "trip_distance", "duration_s"]].copy()
-    done = done[(done["duration_s"] > 60) & (done["trip_distance"] > 0)]
-    done["mph"] = done["trip_distance"] / (done["duration_s"] / 3600)
-    out = pd.Series(np.nan, index=trips.index)
-    w = pd.Timedelta(window)
-    for zone, grp in trips.groupby("pu_zone"):
-        d = done[done["pu_zone"] == zone].sort_values("dropoff_ts")
-        if d.empty:
+    # Step 1: Prepare the completed trips
+    done = trips[["pu_zone", "dropoff_ts", "trip_distance", "duration_s"]].copy()   # taking columns for done/completed trips
+    done = done[(done["duration_s"] > 60) & (done["trip_distance"] > 0)]      # filtering out trips with duration less than or equal to 60 seconds and distance less than or equal to 0. Otherwise it will impact the stats
+    done["mph"] = done["trip_distance"] / (done["duration_s"] / 3600)     # calculating the speed in mph
+
+    # Step 2: Set up the output
+    out = pd.Series(np.nan, index=trips.index)       # out has one slot per trip, all starting as NaN. Trips with no eligible recent trips stay NaN
+    w = pd.Timedelta(window)    # pd.Timedelta("15min") turns the string into a time duration, so it can be subtracted from timestamps.
+
+    # Step 3: Process each zone
+    for zone, grp in trips.groupby("pu_zone"):     # For each pickup zone: grp holds the trips in that zone that need the feature.
+        d = done[done["pu_zone"] == zone].sort_values("dropoff_ts")     # d holds that zone's completed trips, sorted by drop-off time. The sort is required for the binary search below.
+        if d.empty:         # If the zone has no valid completed trips, it's skipped and its trips keep NaN.
             continue
-        ends = d["dropoff_ts"].to_numpy()
+
+        # Step 4: Find each trip's window with binary search
+        ends = d["dropoff_ts"].to_numpy()   
         mph = d["mph"].to_numpy()
-        starts = grp["pickup_ts"].to_numpy()
-        hi = np.searchsorted(ends, starts, side="left")          # completed strictly before pickup
-        lo = np.searchsorted(ends, starts - w, side="left")
-        vals = [np.median(mph[a:b]) if b > a else np.nan for a, b in zip(lo, hi, strict=True)]
-        out.loc[grp.index] = vals
+        starts = grp["pickup_ts"].to_numpy()        # getting the pickup times
+        hi = np.searchsorted(ends, starts, side="left")          # returns indexs of high for all trips in the group. completed strictly before pickup
+        lo = np.searchsorted(ends, starts - w, side="left")     # returns index of low for all trips in the group. completed within the window before pickup
+
+        # Step 5: Compute the medians
+        vals = [np.median(mph[a:b]) if b > a else np.nan for a, b in zip(lo, hi, strict=True)] # For each trip, take the speeds in its window slice and compute the median
+        out.loc[grp.index] = vals       # writing the results back to the correct rows. Check explanations.md
     return out
+
+# Note: Check docs/explanations.md for detailed explanations

@@ -53,8 +53,10 @@ def reject_bad_rows(
         "dropoff_before_pickup": duration < 0,
         "zero_duration": duration == 0,
         "duration_over_6h": duration > config.MAX_DURATION_S,
-        # TODO(M2): is dropping passenger_count == 0 / null the right call? Classify the
-        # missingness (MCAR/MAR/MNAR, Ch. 5) before deciding. For now we only count it.
+        # SOLVED(M2): passenger_count 0/null is NOT a reason to drop the trip. If its missingness
+        # clusters by vendor/month it's MAR (check with `taxieta solve m2`); the duration label is still
+        # valid, and ETA doesn't need passenger_count. Dropping would bias the data toward the
+        # vendors that fill it in. We keep the rows and only count them.
     }
     report: dict[str, int] = {}
     bad = pd.Series(False, index=df.index)

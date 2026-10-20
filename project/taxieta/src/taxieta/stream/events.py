@@ -43,15 +43,26 @@ def to_dict(ev: TripStarted | TripCompleted) -> dict:
 
 def event_stream(trips: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, TripStarted | TripCompleted]]:
     """Yield (event_time, event) for all trips, merged in event-time order."""
+
+    # Step 1: One row per trip start 
     starts = trips[["trip_id", "pickup_ts", "pu_zone", "do_zone"]].assign(kind=0, ts=trips["pickup_ts"])
+
+    # Step 2: One row per trip completion
     ends = trips[["trip_id", "pickup_ts", "dropoff_ts", "pu_zone", "do_zone", "duration_s",
                   "trip_distance", "fare_amount"]].assign(kind=1, ts=trips["dropoff_ts"])
+
+    # Step 3: Merge and sort by time
     merged = pd.concat([starts, ends], ignore_index=True).sort_values(["ts", "kind"], kind="stable")
+
+    # Step 4: Turn rows into event objects
     for r in merged.itertuples(index=False):
         if r.kind == 0:
-            yield r.ts, TripStarted(r.trip_id, r.pickup_ts.isoformat(), int(r.pu_zone), int(r.do_zone))
+            yield r.ts, TripStarted(r.trip_id, r.pickup_ts.isoformat(), int(r.pu_zone), int(r.do_zone))     # reformatting so that it can be serialized and go into JSON or Kafka
         else:
             yield r.ts, TripCompleted(
                 r.trip_id, r.pickup_ts.isoformat(), r.dropoff_ts.isoformat(), int(r.pu_zone),
                 int(r.do_zone), float(r.duration_s), float(r.trip_distance), float(r.fare_amount),
-            )
+            )                                                                                 # reformatting so that it can be serialized and go into JSON or Kafka
+
+
+# Note: Check docs/explanations.md for detailed explanations

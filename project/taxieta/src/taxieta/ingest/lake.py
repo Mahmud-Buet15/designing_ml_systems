@@ -81,11 +81,11 @@ def read_lake(months: list[tuple[int, int]] | None = None, columns: list[str] | 
     """Read lake partitions into pandas. months=None reads everything."""
     import duckdb
 
-    glob = str(config.LAKE_DIR / "*" / "*" / "*.parquet")
-    cols = ", ".join(columns) if columns else "*"
-    where = ""
-    if months:
-        conds = " OR ".join(f"(year={y} AND month={m})" for y, m in months)
-        where = f"WHERE {conds}"
-    q = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=1) {where} ORDER BY pickup_ts"
-    return duckdb.sql(q).df()
+    glob = str(config.LAKE_DIR / "*" / "*" / "*.parquet")   # specify the file path to read from the data lake
+    cols = ", ".join(columns) if columns else "*"  # specify the columns to read from the data lake
+    where = ""  # specify the condition to filter the data
+    if months:  # if months is not None
+        conds = " OR ".join(f"(year={y} AND month={m})" for y, m in months)   # join the conditions with OR
+        where = f"WHERE {conds}"   # add the conditions to the where clause
+    q = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=1) {where} ORDER BY pickup_ts"  # duckdb query
+    return duckdb.sql(q).df()   # convert the result to pandas DataFrame
