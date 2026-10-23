@@ -437,3 +437,112 @@ All of these live inside `ZoneSpeedWindow`, which isn't shown, so they're worth 
 - **Window edges:** the batch version includes a drop-off exactly at `pickup − 15min` and excludes one exactly at pickup. The exclusion at pickup is already handled by `event_stream` putting starts first. The window's eviction has to **keep** entries where `dropoff >= now − window` and only drop strictly older ones.
 - **Median definition:** with an even number of values, `np.median` averages the two middle ones (10 and 12 → 11). If the window uses a different method, such as picking the lower middle value, results will differ slightly.
 - **Duplicate `trip_id`s:** the dict keeps only the last value written for each ID, so a repeated ID would overwrite another trip's result. IDs need to be unique.
+
+<br><br>
+
+## Code Explanation 5
+```python
+def tv_distance(a: pd.Series, b: pd.Series) -> float:
+    """Total variation distance between two discrete distributions (Ch. 3)."""
+    pa, pb = a.value_counts(normalize=True), b.value_counts(normalize=True)
+    idx = pa.index.union(pb.index)
+-     return float(0.5(pa.reindex(idx, fill_value=
+0) - pb.reindex(idx, fill_value=0)).abs().sum())
+```
+
+This function calculates the **Total Variation Distance (TVD)** between two empirical probability distributions represented by pandas Series `a` and `b`.
+
+TVD is a standard statistical metric used to measure how different two probability distributions are. For discrete distributions, it is defined as:
+
+$$\delta(P, Q) = \frac{1}{2} \sum_{x \in \Omega} \vert{}P(x) - Q(x)\vert{}$$
+
+It yields a value between **$0$** (the distributions are completely identical) and **$1$** (the distributions have disjoint supports, i.e., zero overlap).
+
+---
+
+### Step-by-Step Code Walkthrough
+
+*(Note: There is a small typo in the original return line: `0.5(...)` needs an explicit multiplication operator `0.5 * (...)` in Python).*
+
+```python
+def tv_distance(a: pd.Series, b: pd.Series) -> float:
+    # 1. Compute empirical probability distributions
+    pa, pb = a.value_counts(normalize=True), b.value_counts(normalize=True)
+
+    # 2. Get the unified set of all unique categories
+    idx = pa.index.union(pb.index)
+
+    # 3. Align indices, fill missing categories with 0, compute TVD formula
+    return float(
+        0.5 * (pa.reindex(idx, fill_value=0) - pb.reindex(idx, fill_value=0)).abs().sum()
+    )
+
+```
+
+#### 1. `a.value_counts(normalize=True)`
+
+* Counts the frequency of each distinct value in `a` and divides by the total count (`normalize=True`).
+* Converts raw sample observations into empirical probability mass functions ($P(x)$ and $Q(x)$), where values sum to $1.0$.
+
+#### 2. `idx = pa.index.union(pb.index)`
+
+* Finds every unique outcome present in **either** `a` or `b` ($\Omega = \text{Support}(P) \cup \text{Support}(Q)$).
+* This is necessary because Series `a` might have values that Series `b` never observed (e.g., `'cat'` appears in `a` but not `b`).
+
+#### 3. `.reindex(idx, fill_value=0)`
+
+* Re-aligns both probability distributions so they share the exact same categories in the same order.
+* If a category only exists in `a`, its probability in `b` is assigned `0` (and vice-versa).
+
+#### 4. `0.5 * (... - ...).abs().sum()`
+
+* Evaluates $\frac{1}{2} \sum \vert{}P(x) - Q(x)\vert{}$:
+* Subtracts the two aligned Series.
+* `.abs()` takes the absolute difference for each category.
+* `.sum()` adds them all up.
+* Multiplies by `0.5` to complete the formula.
+
+
+
+---
+
+### Example
+
+Suppose we compare two coin-flip experiments:
+
+```python
+import pandas as pd
+
+# 70% Heads, 30% Tails
+sample_a = pd.Series(["H", "H", "H", "H", "H", "H", "H", "T", "T", "T"])
+
+# 40% Heads, 40% Tails, 20% Edge
+sample_b = pd.Series(["H", "H", "T", "T", "Edge"])
+
+# Value counts (probabilities):
+# pa: {'H': 0.7, 'T': 0.3}
+# pb: {'H': 0.4, 'T': 0.4, 'Edge': 0.2}
+
+# Unified Index: ['Edge', 'H', 'T']
+# pa aligned: [0.0,  0.7,  0.3]
+# pb aligned: [0.2,  0.4,  0.4]
+
+# Absolute differences:
+# |0.0 - 0.2| = 0.2
+# |0.7 - 0.4| = 0.3
+# |0.3 - 0.4| = 0.1
+# Sum of abs diffs = 0.2 + 0.3 + 0.1 = 0.6
+
+# TVD = 0.5 * 0.6 = 0.3
+
+```
+
+Running the function:
+
+```python
+print(tv_distance(sample_a, sample_b))
+# Output: 0.3
+
+```
+
+A TVD of `0.3` means the two distributions differ by 30% across their shared outcomes.

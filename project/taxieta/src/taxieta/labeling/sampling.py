@@ -6,6 +6,7 @@ import random
 from collections.abc import Iterable
 from typing import TypeVar
 
+import numpy as np
 import pandas as pd
 
 T = TypeVar("T")
@@ -41,6 +42,13 @@ def reservoir(stream: Iterable[T], k: int, seed: int | None = None) -> list[T]:
 
 
 def weighted(df: pd.DataFrame, weights: pd.Series, n: int, seed: int = 0) -> pd.DataFrame:
-    """TODO(M3): weighted sampling, e.g. recent weeks 2x. Justify the weights in your log,
-    and test the 'recent data is more valuable' claim properly in Milestone 8."""
+    """Weighted sampling: each row is selected with probability proportional to its weight."""
     return df.sample(n=n, weights=weights, random_state=seed)
+
+
+def recency_weights(ts: pd.Series, recent_weeks: int = 2, boost: float = 2.0) -> pd.Series:
+    """SOLVED(M3): the last `recent_weeks` weeks get `boost`x weight. Justification: traffic
+    patterns drift, so recent trips resemble tomorrow's more. Whether that's TRUE for this data is
+    measured, not assumed, by the data-freshness experiment in Milestone 8."""
+    cutoff = ts.max() - pd.Timedelta(weeks=recent_weeks)    # getting recent weeks data by setting a cutoff
+    return pd.Series(np.where(ts >= cutoff, boost, 1.0), index=ts.index) # giving weight if condition matches, else 1.0

@@ -22,6 +22,8 @@ REQUEST_COLUMNS = ["pickup_ts", "pu_zone", "do_zone"]
 LEAKY_COLUMNS = {"dropoff_ts", "duration_s", "trip_distance", "fare_amount", "tip_amount", "total_amount"}
 
 CATEGORICAL = ["pu_zone", "do_zone", "pu_borough", "do_borough"]
+ZONE_IDS = list(range(1, 266))
+BOROUGHS = ["Bronx", "Brooklyn", "EWR", "Manhattan", "Queens", "Staten Island", "Unknown", "N/A"]
 FEATURE_COLUMNS = [
     "hour", "dow", "is_weekend", "is_rush_hour", "hour_sin", "hour_cos",
     "pu_zone", "do_zone", "pu_borough", "do_borough", "same_zone", "pu_airport", "do_airport",
@@ -93,12 +95,12 @@ class HistoricalStats:
     def transform(self, req: pd.DataFrame) -> pd.DataFrame:
         """Transform the request DataFrame by adding historical features."""
         how = req["pickup_ts"].dt.dayofweek * 24 + req["pickup_ts"].dt.hour
-        k3 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"], how])
-        k2 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"]])
-        m3 = self._by_pair_how.reindex(k3)
-        m2 = self._by_pair.reindex(k2)
-        med = m3["median"].to_numpy()
-        n = m3["size"].to_numpy()
+        k3 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"], how])   # creating a multi-index of (pickup_zone, dropoff_zone, hour_of_week)
+        k2 = pd.MultiIndex.from_arrays([req["pu_zone"], req["do_zone"]])      # creating a multi-index of (pickup_zone, dropoff_zone)
+        m3 = self._by_pair_how.reindex(k3)   # reindexing the multi-index of (pickup_zone, dropoff_zone, hour_of_week)
+        m2 = self._by_pair.reindex(k2)     # reindexing the multi-index of (pickup_zone, dropoff_zone)
+        med = m3["median"].to_numpy()      # getting the median of the reindexed multi-index
+        n = m3["size"].to_numpy()         # getting the count of the reindexed multi-index
         fallback = np.isnan(med)
         med = np.where(fallback, m2["median"].to_numpy(), med)
         n = np.where(fallback, m2["size"].to_numpy(), n)
@@ -122,12 +124,12 @@ def build_features(
     req = req[REQUEST_COLUMNS].copy()   # drop everything else: the leak firewall
     req["pickup_ts"] = pd.to_datetime(req["pickup_ts"])
 
-    if zone_speed is None:
+    if zone_speed is None:  # if no zone speed data is provided, then set it to NaN
         zs = pd.Series(np.nan, index=req.index)
-    elif callable(zone_speed):
+    elif callable(zone_speed):  # if zone speed is a function, then calculate it
         zs = pd.Series([zone_speed(int(z), t) for z, t in zip(req["pu_zone"], req["pickup_ts"], strict=True)],
                        index=req.index, dtype=float)
-    else:
+    else:  # if zone speed is a series, then reindex it to the request index
         zs = zone_speed.reindex(req.index).astype(float)
 
     X = pd.concat([
@@ -136,8 +138,11 @@ def build_features(
         hist.transform(req),
         pd.DataFrame({"zone_speed_15m": zs, "zone_speed_missing": zs.isna().astype(int)}),
     ], axis=1)
+    # SOLVED(M3/M4): a FIXED category vocabulary. Per-frame `.astype("category")` gives different
+    # integer codes in different frames (train vs valid vs a single serving request), which is a
+    # silent train/serve skew bug for any model that consumes codes.
     for c in CATEGORICAL:
-        X[c] = X[c].astype("category")
+        X[c] = pd.Categorical(X[c], categories=ZONE_IDS if c.endswith("zone") else BOROUGHS)
     return X[FEATURE_COLUMNS]
 
 

@@ -128,6 +128,19 @@ def make_month(year: int, month: int, n: int = 20_000, shift: bool = False, seed
     df.loc[idx[:k], "tpep_dropoff_datetime"] = df.loc[idx[:k], "tpep_pickup_datetime"] - pd.Timedelta("5min")
     df.loc[idx[k:2 * k], "PULocationID"] = 264
     df.loc[idx[2 * k:], "tpep_pickup_datetime"] = start - pd.Timedelta("2D")
+
+    # Meter glitches that SURVIVE validation (~1%): the target of Milestone 3's weak supervision.
+    rest = np.setdiff1d(np.arange(n), idx)
+    g = rng.choice(rest, 4 * k, replace=False)
+    a, b, c, d = g[:k], g[k:2 * k], g[2 * k:3 * k], g[3 * k:]
+    df.loc[a, "trip_distance"] = 0.0                                          # distance not recorded
+    df.loc[a, "fare_amount"] = rng.uniform(25, 80, len(a)).round(2)
+    df.loc[b, "trip_distance"] = rng.uniform(80, 300, len(b)).round(2)       # impossible speed
+    df.loc[c, "DOLocationID"] = df.loc[c, "PULocationID"]                     # meter left running
+    df.loc[c, "tpep_dropoff_datetime"] = df.loc[c, "tpep_pickup_datetime"] + pd.to_timedelta(
+        rng.uniform(2.2, 5, len(c)) * 3600, "s").round("s")
+    df.loc[d, "fare_amount"] = rng.uniform(0.01, 2.5, len(d)).round(2)       # fare far too low
+    df.attrs["invalid_rows"] = np.sort(g).tolist()
     return df
 
 
@@ -142,5 +155,10 @@ def write_fixture(months: list[tuple[int, int]], n: int = 20_000) -> None:
     for y, m in months:
         shift = y >= 2020 and m >= 3
         path = config.RAW_DIR / f"yellow_tripdata_{y}-{m:02d}.parquet"
-        make_month(y, m, n=n, shift=shift).to_parquet(path, index=False)
+        df = make_month(y, m, n=n, shift=shift)
+        invalid = df.attrs.pop("invalid_rows")
+        df.to_parquet(path, index=False)
+        # Ground truth for the injected meter glitches (stands in for hand labels in M3).
+        truth = df.loc[invalid, ["tpep_pickup_datetime", "PULocationID", "DOLocationID"]]
+        truth.assign(invalid=1).to_parquet(config.RAW_DIR / f"fixture_truth_{y}-{m:02d}.parquet", index=False)
         print(f"fixture {path.name} ({'shifted' if shift else 'baseline'})")
